@@ -13,11 +13,11 @@
 
 ## Требования
 
-- macOS
+- macOS, Windows или Linux
 - Python 3.11+
-- `ffmpeg`
+- `ffmpeg` в `PATH`
 
-## Установка
+## Установка на macOS
 
 Установите `ffmpeg`:
 
@@ -38,7 +38,38 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Установка на Windows
+
+1. Установите Python 3.11+.
+2. Установите `ffmpeg` и добавьте путь к `ffmpeg.exe` в `PATH`.
+Пример типового пути:
+
+```text
+C:\ffmpeg\bin\ffmpeg.exe
+```
+
+3. Создайте и активируйте виртуальное окружение:
+
+```bat
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+4. Установите зависимости:
+
+```bat
+pip install -r requirements.txt
+```
+
 ## Запуск
+
+Кроссплатформенная версия:
+
+```bash
+python -B app.py
+```
+
+Оригинальный локальный файл:
 
 ```bash
 python -B Транскрибатор.py
@@ -60,7 +91,7 @@ http://127.0.0.1:7860
 
 ## Структура проекта
 
-- `Транскрибатор.py` — основное приложение
+- `app.py` — кроссплатформенная версия для GitHub
+- `Транскрибатор.py` — исходная локальная версия
 - `requirements.txt` — зависимости Python
 - `transcription_outputs/` — результаты транскрибации
-
