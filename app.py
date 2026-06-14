@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import gc
+import json
 import os
 import re
+import sys
 import threading
 import wave
 import shutil
@@ -23,7 +25,86 @@ SUPPORTED_EXTENSIONS = [
 ]
 SUPPORTED_EXTENSIONS_SET = set(SUPPORTED_EXTENSIONS)
 
-OUTPUT_DIR = Path.cwd() / "transcription_outputs"
+
+def get_runtime_base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def get_output_root_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        documents_dir = Path.home() / "Documents"
+        base_dir = documents_dir if documents_dir.exists() else Path.home()
+        return base_dir / "Transkribator"
+    return Path.cwd()
+
+
+RUNTIME_BASE_DIR = get_runtime_base_dir()
+APP_CONFIG_DIR = Path.home() / ".transkribator"
+APP_CONFIG_PATH = APP_CONFIG_DIR / "config.json"
+
+
+def load_app_config() -> dict:
+    try:
+        if APP_CONFIG_PATH.exists():
+            return json.loads(APP_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def save_app_config(config: dict) -> None:
+    APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    APP_CONFIG_PATH.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def choose_output_root_interactive(initial_dir: Path | None = None) -> Path | None:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        selected = filedialog.askdirectory(
+            title="Выберите папку для сохранения результатов транскрибации",
+            initialdir=str(initial_dir or Path.home()),
+            mustexist=True,
+        )
+        root.destroy()
+        if selected:
+            return Path(selected).expanduser().resolve()
+    except Exception:
+        return None
+    return None
+
+
+def initialize_output_root_dir() -> Path:
+    default_root = get_output_root_dir()
+    config = load_app_config()
+    saved_path = config.get("output_root")
+
+    if saved_path:
+        try:
+            output_root = Path(saved_path).expanduser().resolve()
+            output_root.mkdir(parents=True, exist_ok=True)
+            return output_root
+        except Exception:
+            pass
+
+    chosen_path = choose_output_root_interactive(default_root)
+    output_root = chosen_path or default_root
+    output_root.mkdir(parents=True, exist_ok=True)
+    save_app_config({"output_root": str(output_root)})
+    return output_root
+
+
+OUTPUT_ROOT_DIR = initialize_output_root_dir()
+OUTPUT_DIR = OUTPUT_ROOT_DIR / "transcription_outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Профили с упором на качество речи, а не только на скорость
@@ -87,6 +168,10 @@ def format_seconds(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+def get_output_path_label() -> str:
+    return str(OUTPUT_DIR)
+
+
 def normalize_text(text: str) -> str:
     text = (text or "").replace("\n", " ").replace("\t", " ").strip()
     text = re.sub(r"\s+", " ", text)
@@ -147,6 +232,8 @@ def find_ffmpeg() -> str:
         return _FFMPEG_BIN
 
     candidates = [
+        str(RUNTIME_BASE_DIR / "ffmpeg.exe"),
+        str(RUNTIME_BASE_DIR / "ffmpeg"),
         shutil.which("ffmpeg"),
         "ffmpeg",
         "/opt/homebrew/bin/ffmpeg",
@@ -476,6 +563,28 @@ def clear_ui():
     )
 
 
+def change_output_directory():
+    global OUTPUT_ROOT_DIR, OUTPUT_DIR
+
+    chosen_path = choose_output_root_interactive(OUTPUT_ROOT_DIR)
+    if not chosen_path:
+        return (
+            "Папка сохранения не изменена.",
+            gr.update(value=get_output_path_label()),
+        )
+
+    OUTPUT_ROOT_DIR = chosen_path
+    OUTPUT_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR = OUTPUT_ROOT_DIR / "transcription_outputs"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    save_app_config({"output_root": str(OUTPUT_ROOT_DIR)})
+
+    return (
+        f"Папка сохранения обновлена: {OUTPUT_DIR}",
+        gr.update(value=get_output_path_label()),
+    )
+
+
 def request_cancel():
     _CANCEL_EVENT.set()
     return "Остановка запрошена. Сервис сохранит уже готовые результаты и завершит обработку на ближайшем безопасном этапе."
@@ -692,7 +801,7 @@ with gr.Blocks() as demo:
     gr.HTML(f"""
         <div class="note-box">
             Поддерживаются: {", ".join(SUPPORTED_EXTENSIONS)}<br>
-            Для MacBook Air начните с профиля «Быстро» или «Баланс».<br>
+            При первом запуске приложение попросит выбрать папку для сохранения результатов.<br>
             Короткие файлы сервис обрабатывает без лишнего разбиения, длинные — по частям.
         </div>
     """)
@@ -734,9 +843,16 @@ with gr.Blocks() as demo:
         interactive=False,
     )
 
+    output_path_box = gr.Textbox(
+        label="Папка сохранения результатов",
+        value=get_output_path_label(),
+        interactive=False,
+    )
+
     with gr.Row():
         transcribe_button = gr.Button("Транскрибировать", variant="primary")
         stop_button = gr.Button("Остановить", variant="stop")
+        change_output_button = gr.Button("Изменить папку сохранения")
         clear_button = gr.Button("Очистить", variant="secondary")
 
     with gr.Tabs():
@@ -804,6 +920,14 @@ with gr.Blocks() as demo:
         fn=request_cancel,
         inputs=[],
         outputs=[status_box],
+        queue=False,
+        show_progress="hidden",
+    )
+
+    change_output_button.click(
+        fn=change_output_directory,
+        inputs=[],
+        outputs=[status_box, output_path_box],
         queue=False,
         show_progress="hidden",
     )
