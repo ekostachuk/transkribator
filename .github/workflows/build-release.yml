@@ -1,0 +1,149 @@
+name: Build desktop packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Windows app
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name Transkribator app.py `
+            --collect-all gradio `
+            --collect-all gradio_client `
+            --collect-all faster_whisper `
+            --collect-all ctranslate2 `
+            --collect-all av `
+            --collect-all tokenizers `
+            --collect-all huggingface_hub
+
+      - name: Bundle ffmpeg and docs
+        shell: pwsh
+        run: |
+          $ffmpegPath = Join-Path $env:ChocolateyInstall 'lib\\ffmpeg\\tools\\ffmpeg\\bin\\ffmpeg.exe'
+          if (!(Test-Path $ffmpegPath)) {
+            $ffmpegPath = (Get-Command ffmpeg).Source
+          }
+          Copy-Item $ffmpegPath dist\\Transkribator\\ffmpeg.exe -Force
+          Copy-Item packaging\\README-windows.txt dist\\Transkribator\\README.txt -Force
+
+      - name: Create Windows archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\\Transkribator\\* -DestinationPath Transkribator-windows.zip -Force
+          Get-FileHash Transkribator-windows.zip -Algorithm SHA256 | ForEach-Object {
+            "$($_.Hash.ToLower())  Transkribator-windows.zip" | Set-Content Transkribator-windows.zip.sha256
+          }
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: |
+            Transkribator-windows.zip
+            Transkribator-windows.zip.sha256
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build macOS app
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name Transkribator app.py \
+            --collect-all gradio \
+            --collect-all gradio_client \
+            --collect-all faster_whisper \
+            --collect-all ctranslate2 \
+            --collect-all av \
+            --collect-all tokenizers \
+            --collect-all huggingface_hub
+
+      - name: Bundle ffmpeg and docs
+        run: |
+          cp "$(which ffmpeg)" "dist/Transkribator.app/Contents/MacOS/ffmpeg"
+          chmod +x "dist/Transkribator.app/Contents/MacOS/ffmpeg"
+          mkdir -p release/macos
+          cp -R "dist/Transkribator.app" release/macos/
+          cp packaging/README-macos.txt release/macos/README.txt
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "Transkribator" -srcfolder release/macos -ov -format UDZO Transkribator-macos.dmg
+          shasum -a 256 Transkribator-macos.dmg | awk '{print tolower($1) "  Transkribator-macos.dmg"}' > Transkribator-macos.dmg.sha256
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-package
+          path: |
+            Transkribator-macos.dmg
+            Transkribator-macos.dmg.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-windows
+      - build-macos
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/windows-package/Transkribator-windows.zip
+            release-assets/windows-package/Transkribator-windows.zip.sha256
+            release-assets/macos-package/Transkribator-macos.dmg
+            release-assets/macos-package/Transkribator-macos.dmg.sha256
+          generate_release_notes: true
