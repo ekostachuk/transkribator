@@ -112,16 +112,36 @@ jobs:
           cp -R "dist/Transkribator.app" release/macos/
           cp packaging/README-macos.txt release/macos/README.txt
 
+      - name: Ad-hoc sign app bundle
+        run: |
+          codesign --force --deep --sign - "release/macos/Transkribator.app"
+          codesign --verify --deep --strict --verbose=2 "release/macos/Transkribator.app"
+
+      - name: Create macOS ZIP
+        run: |
+          ditto -c -k --keepParent "release/macos/Transkribator.app" Transkribator-macos.zip
+          shasum -a 256 Transkribator-macos.zip | awk '{print tolower($1) "  Transkribator-macos.zip"}' > Transkribator-macos.zip.sha256
+
       - name: Create DMG
         run: |
           hdiutil create -volname "Transkribator" -srcfolder release/macos -ov -format UDZO Transkribator-macos.dmg
           shasum -a 256 Transkribator-macos.dmg | awk '{print tolower($1) "  Transkribator-macos.dmg"}' > Transkribator-macos.dmg.sha256
+
+      - name: Validate DMG mount
+        run: |
+          MOUNT_DIR="$(mktemp -d)"
+          hdiutil attach Transkribator-macos.dmg -mountpoint "$MOUNT_DIR" -nobrowse
+          ls -la "$MOUNT_DIR"
+          test -d "$MOUNT_DIR/Transkribator.app"
+          hdiutil detach "$MOUNT_DIR"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-package
           path: |
+            Transkribator-macos.zip
+            Transkribator-macos.zip.sha256
             Transkribator-macos.dmg
             Transkribator-macos.dmg.sha256
 
@@ -144,6 +164,8 @@ jobs:
           files: |
             release-assets/windows-package/Transkribator-windows.zip
             release-assets/windows-package/Transkribator-windows.zip.sha256
+            release-assets/macos-package/Transkribator-macos.zip
+            release-assets/macos-package/Transkribator-macos.zip.sha256
             release-assets/macos-package/Transkribator-macos.dmg
             release-assets/macos-package/Transkribator-macos.dmg.sha256
           generate_release_notes: true
